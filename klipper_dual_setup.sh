@@ -1,93 +1,98 @@
 #!/bin/bash
+
 set -e
 
-# === VARIABLES ===
-KLIPPER_DIR="$HOME/klipper"
-MOONRAKER_DIR="$HOME/moonraker"
-FLUIDD_DIR="$HOME/fluidd"
-KSCREEN_DIR="$HOME/KlipperScreen"
-CONFIG_DIR="$HOME/klipper_config"
-BACKUP_DIR="$HOME/klipper_backups"
-MACROS_DIR="$CONFIG_DIR/macros"
-SCREEN_CONFIG="/home/pi/.config/KlipperScreen/config.json"
+echo "=== Klipper Dual Printer Setup: Megatron (Ender 3 S1 Pro) + Starscream (Kobra 2 Neo) ==="
 
-# === BACKUP EXISTING CONFIGS ===
-mkdir -p "$BACKUP_DIR"
-[ -f "$CONFIG_DIR/printer.cfg" ] && cp "$CONFIG_DIR/printer.cfg" "$BACKUP_DIR/printer.cfg.bak"
-[ -f "$CONFIG_DIR/printer_starscream.cfg" ] && cp "$CONFIG_DIR/printer_starscream.cfg" "$BACKUP_DIR/printer_starscream.cfg.bak"
-
-# === UPDATE SYSTEM ===
+# Update system
 sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y python3 python3-pip git build-essential cmake libusb-1.0-0-dev avrdude gcc-avr binutils-avr avr-libc dfu-util wget xz-utils unzip libjpeg-dev libsdl1.2-dev
+sudo apt install -y git python3-pip python3-dev python3-venv build-essential \
+  libffi-dev libncurses-dev libusb-1.0-0-dev libjpeg-dev \
+  libSDL1.2-dev avrdude gcc-avr binutils-avr avr-libc dfu-util unzip cmake
 
-# === INSTALL REALTEK DRIVERS FOR PAU09 ===
-echo "Installing Realtek drivers for Panda PAU09 Wi-Fi..."
-git clone https://github.com/lwfinger/rt8812au.git ~/rt8812au
-cd ~/rt8812au
-make && sudo make install
-sudo modprobe 88XXau
+# Directories
 cd ~
+mkdir -p klipper_data/printer_starscream_data
+mkdir -p klipper_data/printer_megatron_data
 
-# === KLIPPER ===
-echo "Cloning and setting up Klipper..."
-[ -d "$KLIPPER_DIR" ] || git clone https://github.com/Klipper3d/klipper.git "$KLIPPER_DIR"
+# Backup existing configs
+echo "[+] Backing up any existing configs..."
+mkdir -p ~/printer_cfg_backups
+cp ~/printer.cfg ~/printer_cfg_backups/printer_megatron.cfg 2>/dev/null || true
+cp ~/printer_starscream.cfg ~/printer_cfg_backups/printer_starscream.cfg 2>/dev/null || true
 
-# === MOONRAKER DUAL INSTANCES ===
-echo "Installing Moonraker dual instance support..."
-[ -d "$MOONRAKER_DIR" ] || git clone https://github.com/Arksine/moonraker.git "$MOONRAKER_DIR"
+# Clone extra macros/tools
+echo "[+] Cloning macro/plugin repositories..."
+cd ~
+git clone https://github.com/mmone/OctoprintKlipperPlugin.git || true
+git clone https://github.com/Desuuuu/klipper-macros.git || true
+git clone https://github.com/Frix-x/klippain-shaketune.git || true
+git clone https://github.com/Tombraider2006/klipperFB6.git || true
+git clone https://github.com/protoloft/klipper_z_calibration.git || true
 
-sudo cp "$MOONRAKER_DIR/scripts/moonraker.service" /etc/systemd/system/moonraker.service
-sudo cp "$MOONRAKER_DIR/scripts/moonraker.service" /etc/systemd/system/moonraker2.service
+# Symlink useful macros into configs later
+mkdir -p ~/klipper_data/macros
+cp klipper-macros/*.cfg ~/klipper_data/macros/
+cp klipper_z_calibration/z_calibration.cfg ~/klipper_data/macros/
 
-sudo sed -i 's|/home/pi/moonraker|/home/pi/moonraker|' /etc/systemd/system/moonraker.service
-sudo sed -i 's|ExecStart=.*|ExecStart=/home/pi/moonraker/moonraker --configfile /home/pi/klipper_config/moonraker2.conf|' /etc/systemd/system/moonraker2.service
+# Setup Moonraker2 + Klipper2 service
+echo "[+] Setting up second Moonraker/Klipper instance for Starscream..."
 
-# === FLUIDD MERGED DASHBOARD ===
-echo "Setting up Fluidd dashboard on port 9090..."
-[ -d "$FLUIDD_DIR" ] || git clone https://github.com/fluidd-core/fluidd.git "$FLUIDD_DIR"
-mkdir -p ~/fluidd-multi
-cp -r "$FLUIDD_DIR"/* ~/fluidd-multi/
-# Host Fluidd at :9090 using nginx or Moonraker config (setup later)
+sudo cp /etc/systemd/system/klipper.service /etc/systemd/system/klipper2.service
+sudo cp /etc/systemd/system/moonraker.service /etc/systemd/system/moonraker2.service
 
-# === KLIPPERSCREEN ===
-echo "Installing KlipperScreen with 3.5\" TFT Waveshare support..."
-[ -d "$KSCREEN_DIR" ] || git clone https://github.com/jordanruthe/KlipperScreen.git "$KSCREEN_DIR"
-sudo apt install -y xserver-xorg x11-xserver-utils xinit xinput libjpeg-dev libxft-dev
-"$KSCREEN_DIR/scripts/KlipperScreen-install.sh"
+sudo sed -i 's/\/home\/pi\/klipper\/klippy\.venv/\/home\/pi\/klipper\/klippy.venv/g' /etc/systemd/system/klipper2.service
+sudo sed -i 's/ExecStart=.*/ExecStart=\/home\/pi\/klipper\/klippy-env\/bin\/python3 \/home\/pi\/klipper\/klippy\/klippy.py \/home\/pi\/klipper_data\/printer_starscream_data\/printer.cfg/' /etc/systemd/system/klipper2.service
 
-# === SETUP TFT WAVESHARE 3.5 ===
-echo "Configuring Waveshare TFT 3.5..."
-sudo bash -c "echo 'hdmi_force_hotplug=1\nhdmi_group=2\nhdmi_mode=87\nhdmi_cvt=480 320 60 6 0 0 0\nhdmi_drive=2' >> /boot/config.txt"
+sudo sed -i 's/ExecStart=.*/ExecStart=\/home\/pi\/moonraker-env\/bin\/python3 \/home\/pi\/moonraker\/moonraker.py -c \/home\/pi\/klipper_data\/printer_starscream_data\/moonraker.conf/' /etc/systemd/system/moonraker2.service
 
-# === CLONE MACROS & PLUGINS ===
-echo "Downloading macros and plugins..."
-mkdir -p "$MACROS_DIR"
-cd "$MACROS_DIR"
-git clone https://github.com/mmone/OctoprintKlipperPlugin.git
-git clone https://github.com/Desuuuu/klipper-macros.git
-git clone https://github.com/Frix-x/klippain-shaketune.git
-git clone https://github.com/Tombraider2006/klipperFB6.git
-git clone https://github.com/protoloft/klipper_z_calibration.git
+# Reload services
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable klipper2.service moonraker2.service
+sudo systemctl restart klipper2.service moonraker2.service
 
-# === KSCREEN BUTTONS (OPTIONAL) ===
-echo "Preloading KlipperScreen macros..."
-mkdir -p "$(dirname "$SCREEN_CONFIG")"
-cat <<EOF > "$SCREEN_CONFIG"
+# Fluidd merged config
+echo "[+] Installing Fluidd and configuring both printers in one dashboard..."
+cd ~
+mkdir -p ~/fluidd
+wget -O fluidd.zip https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip
+unzip -o fluidd.zip -d ~/fluidd
+
+# Symlink both printer configs to fluidd access
+ln -sf ~/klipper_data/printer_megatron_data/printer.cfg ~/fluidd/printer_megatron.cfg
+ln -sf ~/klipper_data/printer_starscream_data/printer.cfg ~/fluidd/printer_starscream.cfg
+
+# Set up KlipperScreen
+echo "[+] Setting up KlipperScreen..."
+sudo apt install -y xinit xserver-xorg x11-xserver-utils x11-utils xinput
+cd ~
+git clone https://github.com/jordanruthe/KlipperScreen.git
+cd KlipperScreen
+./scripts/KlipperScreen-install.sh
+
+# Add KlipperScreen buttons
+mkdir -p ~/.KlipperScreen/config
+cat <<EOF > ~/.KlipperScreen/config/buttons.json
 {
-  "macros": {
-    "Calibrate Z": "Z_CALIBRATION_START",
-    "Mesh Bed": "BED_MESH_CALIBRATE",
-    "Input Shaper": "SHAPER_CALIBRATE"
-  }
+  "macros": [
+    {
+      "name": "Smart Z Offset",
+      "gcode": "Z_CALIBRATE"
+    },
+    {
+      "name": "Input Shaper",
+      "gcode": "TUNING_TOWER COMMAND=SET_VELOCITY_LIMIT PARAMETER=ACCEL START=500 STEP_DELTA=100 STEP_HEIGHT=0.1 COUNT=10"
+    }
+  ]
 }
 EOF
 
-# === FINAL STEPS ===
-echo "Enabling and starting services..."
-sudo systemctl enable klipper moonraker moonraker2 klipperscreen
-sudo systemctl restart klipper moonraker moonraker2 klipperscreen
-
-echo "🎉 Setup complete! Visit:"
-echo "➡️ http://<your-raspberry-ip>:9090 (Merged Fluidd Dashboard)"
-echo "🛠 Flash printers manually (Megatron via USB, Starscream via SD)"
-echo "🗂 Configs backed up to: $BACKUP_DIR"
+# Finish
+echo "====================================================="
+echo "✅ All done. Now flash your printers manually:"
+echo "1. Megatron (Ender 3 S1 Pro) via USB"
+echo "2. Starscream (Kobra 2 Neo) via SD card"
+echo
+echo "Then reboot and enjoy dual printer Fluidd dashboard!"
+echo "====================================================="
